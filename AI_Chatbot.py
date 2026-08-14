@@ -1,18 +1,39 @@
 import os
+import streamlit as st
 from dotenv import load_dotenv
-from openai import OpenAI
 from google import genai
 
 load_dotenv()
 
-api_key = os.getenv("MY_OPEN_AI_API_KEY")
+client = genai.Client()
 
-client = OpenAI(api_key=api_key)
-client1 = genai.Client()
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assisstant", "content": "Yo what up boi, U need help?"} 
+    ] 
 
-respone = client1.models.generate_content(
-    model="gemini-3.6-flash",
-    contents='Say hello!'
-)
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
 
-print(respone.text)
+if prompt := st.chat_input("Yo we can chat here..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.chat_message("user").write(prompt)
+
+    gemini_history = [
+        {
+            "role": "model" if m["role"] == "assisstant" else "user",
+            "parts": [{"text": m["content"]}],
+        }
+        for m in st.session_state.messages
+    ]
+
+    respone = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=gemini_history
+    )
+
+    msg = respone.text
+
+    st.session_state.messages.append({"role": "assisstant", "content": msg})
+
+    st.chat_message("assisstant").write(msg)
