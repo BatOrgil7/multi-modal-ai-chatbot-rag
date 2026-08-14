@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["python", "AI_Chatbot.py"]
+CMD ["streamlit", "run", "AI_Chatbot.py", "--server.address=0.0.0.0"]
