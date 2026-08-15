@@ -26,14 +26,13 @@ if prompt := st.chat_input("Yo we can chat here..."):
         }
         for m in st.session_state.messages
     ]
+    
+    with st.chat_message("assisstant"):
+        stream = client.models.generate_content_stream(
+            model="gemini-3.6-flash",
+            contents=gemini_history,
+        )
 
-    respone = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=gemini_history
-    )
-
-    msg = respone.text
+        msg = st.write_stream(chunk.text for chunk in stream)
 
     st.session_state.messages.append({"role": "assisstant", "content": msg})
-
-    st.chat_message("assisstant").write(msg)
