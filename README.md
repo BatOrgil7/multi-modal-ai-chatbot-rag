@@ -6,6 +6,7 @@ A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone pro
 
 - Chat interface built with [Streamlit](https://streamlit.io/)
 - Conversation powered by the Gemini API (`gemini-3.6-flash`) via the `google-genai` SDK
+- Responses are streamed token-by-token as they're generated, instead of waiting for the full reply
 - Chat history persisted in Streamlit session state for the duration of a session
 
 ## Planned
