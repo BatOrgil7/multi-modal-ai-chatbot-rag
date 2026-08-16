@@ -57,6 +57,40 @@ if "last_output_tokens" not in st.session_state:
 if "last_summarization_tokens" not in st.session_state:
     st.session_state.last_summarization_tokens = 0
 
+with st.sidebar:
+    st.header("📊 Conversation Summary")
+    if st.session_state.summary:
+        st.write(st.session_state.summary)
+    else:
+        st.info("Summary will appear here after a few messages.")
+
+    st.header("💰 Token Usage")
+
+    if st.session_state.last_input_tokens > 0:
+        st.markdown("**Last Chat Interaction:**")
+        st.markdown(f"- Chat Input (sent to API): {st.session_state.last_input_tokens} tokens")
+        st.markdown(f"- Chat Output (from API): {st.session_state.last_output_tokens} tokens")
+        st.markdown(f"- Chat Total: {st.session_state.last_input_tokens + st.session_state.last_output_tokens} tokens")
+
+        if st.session_state.last_summarization_tokens > 0:
+            st.markdown(f"- **Summarization API Call:** {st.session_state.last_summarization_tokens} tokens")
+            st.caption("(Summarization uses gemini-3.1-flash-lite, which is much cheaper)")
+
+        st.divider()
+
+    st.markdown(f"**Cumulative Total:** {st.session_state.total_tokens} tokens")
+    st.caption("Lower tokens = lower costs!")
+
+    if st.button("🔄 Reset Conversation"):
+        st.session_state.messages = [{"role": "assisstant", "content": "Yo what up boi, U need help?"}]
+        st.session_state.context = list(st.session_state.messages)
+        st.session_state.total_tokens = 0
+        st.session_state.summary = ""
+        st.session_state.last_input_tokens = 0
+        st.session_state.last_output_tokens = 0
+        st.session_state.last_summarization_tokens = 0
+        st.rerun()
+
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
@@ -100,7 +134,20 @@ if prompt := st.chat_input("Yo we can chat here..."):
             config=types.GenerateContentConfig(system_instruction=system_instruction),
         )
 
-        msg = st.write_stream(chunk.text for chunk in stream)
+        usage = {}
+
+        def stream_text():
+            for chunk in stream:
+                if chunk.usage_metadata:
+                    usage["metadata"] = chunk.usage_metadata
+                yield chunk.text
+
+        msg = st.write_stream(stream_text())
+
+    if "metadata" in usage:
+        st.session_state.last_input_tokens = usage["metadata"].prompt_token_count or 0
+        st.session_state.last_output_tokens = usage["metadata"].candidates_token_count or 0
+        st.session_state.total_tokens += st.session_state.last_input_tokens + st.session_state.last_output_tokens
 
     st.session_state.messages.append({"role": "assisstant", "content": msg})
     st.session_state.context.append({"role": "assisstant", "content": msg})
