@@ -8,32 +8,91 @@ load_dotenv()
 
 client = genai.Client()
 
-persona = st.sidebar.selectbox("Choose persona", ["Travel Planner", "Math Tutor", "Chef"])
+persona_choice = st.sidebar.selectbox("Choose persona", ["Travel Planner", "Math Tutor", "Chef", "Custom"])
+
+if persona_choice == "Custom":
+    persona = st.sidebar.text_input("Custom persona", "Friendly Assistant")
+else:
+    persona = persona_choice
 
 custom_prompt = st.sidebar.text_area("Define your chatbot's role")
 
 system_instruction = custom_prompt if custom_prompt else f"You are a {persona}. Please assist the user with their queries."
+
+def summarize_conversation(messages: list[dict]) -> tuple[str, int]:
+    conversation_text = "\n".join(f"{msg['role']}: {msg['content']}" for msg in messages)
+    summary_prompt = f"Summarize the following conversation concisely:\n{conversation_text}\nSummary:"
+
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents=summary_prompt,
+        config=types.GenerateContentConfig(max_output_tokens=750)
+    )
+
+    summarization_tokens = response.usage_metadata.total_token_count
+
+    return response.text, summarization_tokens
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assisstant", "content": "Yo what up boi, U need help?"}
     ]
 
+if "context" not in st.session_state:
+    st.session_state.context = list(st.session_state.messages)
+
+if "total_tokens" not in st.session_state:
+    st.session_state.total_tokens = 0
+
+if "summary" not in st.session_state:
+    st.session_state.summary = ""
+
+if "last_input_tokens" not in st.session_state:
+    st.session_state.last_input_tokens = 0
+
+if "last_output_tokens" not in st.session_state:
+    st.session_state.last_output_tokens = 0
+
+if "last_summarization_tokens" not in st.session_state:
+    st.session_state.last_summarization_tokens = 0
+
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
 if prompt := st.chat_input("Yo we can chat here..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.context.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
+
+    st.session_state.last_summarization_tokens = 0
+
+    user_message_count = sum(1 for msg in st.session_state.messages if msg['role'] == 'user')
+
+    if user_message_count > 0 and user_message_count % 10 == 0:
+
+        messages_to_summarize = st.session_state.context[:-1]
+        current_user_message = st.session_state.context[-1]
+
+        summary_text, summarization_tokens = summarize_conversation(messages_to_summarize)
+
+        st.session_state["summary"] = summary_text
+        st.session_state.last_summarization_tokens = summarization_tokens
+        st.session_state.total_tokens += summarization_tokens
+
+        st.session_state.context = [
+            {"role": "system", "content": f"This is a summary of the conversation so far: {st.session_state['summary']}"},
+            current_user_message
+        ]
 
     gemini_history = [
         {
             "role": "model" if m["role"] == "assisstant" else "user",
             "parts": [{"text": m["content"]}],
         }
-        for m in st.session_state.messages
+        for m in st.session_state.context
     ]
-    
+
     with st.chat_message("assisstant"):
         stream = client.models.generate_content_stream(
             model="gemini-3.6-flash",
@@ -44,3 +103,4 @@ if prompt := st.chat_input("Yo we can chat here..."):
         msg = st.write_stream(chunk.text for chunk in stream)
 
     st.session_state.messages.append({"role": "assisstant", "content": msg})
+    st.session_state.context.append({"role": "assisstant", "content": msg})
