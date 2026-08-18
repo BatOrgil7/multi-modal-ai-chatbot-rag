@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+import memory
+
 load_dotenv()
 
 client = genai.Client()
@@ -91,6 +93,41 @@ with st.sidebar:
         st.session_state.last_summarization_tokens = 0
         st.rerun()
 
+    st.header("🧠 Long-Term Memory")
+
+    all_memories = memory.get_all_memories()
+
+    if not all_memories:
+        st.info("No memories stored yet.")
+    else:
+        for memory_type in memory.MEMORY_TYPES:
+            type_memories = [m for m in all_memories if m["memory_type"] == memory_type]
+            if not type_memories:
+                continue
+
+            st.subheader(memory_type.capitalize())
+            for m in type_memories:
+                with st.expander(m["content"][:50] + ("..." if len(m["content"]) > 50 else "")):
+                    edited_content = st.text_area(
+                        "Content", value=m["content"], key=f"mem_content_{m['id']}"
+                    )
+                    save_col, delete_col = st.columns(2)
+                    with save_col:
+                        if st.button("💾 Save", key=f"mem_save_{m['id']}"):
+                            new_embedding = memory.embed_text(client, edited_content)
+                            memory.update_memory(m["id"], memory_type, edited_content, new_embedding)
+                            st.rerun()
+                    with delete_col:
+                        if st.button("🗑️ Delete", key=f"mem_delete_{m['id']}"):
+                            memory.delete_memory(m["id"])
+                            st.rerun()
+
+    st.divider()
+    confirm_wipe = st.checkbox("Confirm permanent deletion of ALL memories")
+    if st.button("🗑️ Delete All Memories", disabled=not confirm_wipe):
+        memory.delete_all_memories()
+        st.rerun()
+
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
@@ -119,6 +156,8 @@ if prompt := st.chat_input("Yo we can chat here..."):
             current_user_message
         ]
 
+        memory.extract_memories(client, messages_to_summarize)
+
     gemini_history = [
         {
             "role": "model" if m["role"] == "assisstant" else "user",
@@ -127,11 +166,14 @@ if prompt := st.chat_input("Yo we can chat here..."):
         for m in st.session_state.context
     ]
 
+    relevant_memories = memory.retrieve_relevant_memories(client, prompt)
+    full_system_instruction = system_instruction + memory.format_memories_for_prompt(relevant_memories)
+
     with st.chat_message("assisstant"):
         stream = client.models.generate_content_stream(
             model="gemini-3.6-flash",
             contents=gemini_history,
-            config=types.GenerateContentConfig(system_instruction=system_instruction),
+            config=types.GenerateContentConfig(system_instruction=full_system_instruction),
         )
 
         usage = {}
