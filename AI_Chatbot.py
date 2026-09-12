@@ -1,5 +1,6 @@
 import os
 import streamlit as st
+import pypdf
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -9,6 +10,51 @@ import memory
 load_dotenv()
 
 client = genai.Client()
+
+
+def extract_file_data(file) -> dict:
+    file.seek(0)
+    if file.name.lower().endswith(".pdf"):
+        reader = pypdf.PdfReader(file)
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        return {"text": text, "pages": len(reader.pages)}
+    return {"text": file.read().decode("utf-8"), "pages": None}
+
+
+uploaded_file = st.file_uploader("Upload a PDF or TXT files", type=("txt", "pdf"))
+
+if "file_cache" not in st.session_state:
+    st.session_state.file_cache = {}
+
+document_data = {"text": "", "pages": None}
+
+if uploaded_file:
+    cache_key = f"{uploaded_file.name}:{uploaded_file.size}"
+    if cache_key not in st.session_state.file_cache:
+        try:
+            st.session_state.file_cache[cache_key] = extract_file_data(uploaded_file)
+        except Exception as e:
+            st.error(f"Error reading {uploaded_file.name}: {e}")
+            st.session_state.file_cache[cache_key] = {"text": "", "pages": None}
+    document_data = st.session_state.file_cache[cache_key]
+
+    if not document_data["text"]:
+        st.warning(
+            "No text could be extracted from this file. If it's a PDF, make sure it "
+            "contains selectable text rather than scanned images. You can still chat normally."
+        )
+
+document_section = ""
+if document_data["text"]:
+    document_section = (
+        "\n\nThe user has uploaded the following document. Use it as the primary "
+        "source when answering questions about it:\n"
+        f"--- BEGIN DOCUMENT ---\n{document_data['text']}\n--- END DOCUMENT ---"
+    )
 
 persona_choice = st.sidebar.selectbox("Choose persona", ["Travel Planner", "Math Tutor", "Chef", "Custom"])
 
@@ -167,7 +213,7 @@ if prompt := st.chat_input("Yo we can chat here..."):
     ]
 
     relevant_memories = memory.retrieve_relevant_memories(client, prompt)
-    full_system_instruction = system_instruction + memory.format_memories_for_prompt(relevant_memories)
+    full_system_instruction = system_instruction + memory.format_memories_for_prompt(relevant_memories) + document_section
 
     with st.chat_message("assisstant"):
         stream = client.models.generate_content_stream(
@@ -193,3 +239,18 @@ if prompt := st.chat_input("Yo we can chat here..."):
 
     st.session_state.messages.append({"role": "assisstant", "content": msg})
     st.session_state.context.append({"role": "assisstant", "content": msg})
+
+with st.sidebar:
+    st.header("📄 Document Information")
+
+    if uploaded_file:
+        st.markdown(f"**Filename:** {uploaded_file.name}")
+        st.markdown(f"**File size:** {uploaded_file.size:,} bytes")
+
+        if document_data["pages"] is not None:
+            st.markdown(f"**Pages:** {document_data['pages']}")
+
+        if document_data["text"]:
+            st.success("✅ Document loaded! Ask questions below.")
+    else:
+        st.info("No document uploaded yet. Upload a file above to get started!")
