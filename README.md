@@ -1,6 +1,6 @@
 # Multi-Modal AI Chatbot RAG
 
-A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone project in progress — the current version implements a basic conversational chat interface, with multi-modal input and retrieval-augmented generation (RAG) planned as next steps.
+A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone project in progress — the current version supports conversational chat, document upload and Q&A, and persistent long-term memory, with image/audio input and chunked retrieval over a knowledge store planned as next steps.
 
 ## Current Features
 
@@ -11,11 +11,12 @@ A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone pro
 - Chat history persisted in Streamlit session state for the duration of a session
 - Automatic conversation summarization every 10 user messages, keeping the context sent to the model small enough to avoid hitting context-length limits, without losing the full chat history shown on screen
 - Long-term memory: the chatbot extracts and remembers facts, preferences, and past events about the user across sessions, retrieves what's relevant to each new message, and exposes a sidebar dashboard to view, edit, or delete what it remembers (see [Long-Term Memory](#long-term-memory) below)
+- Document upload (PDF/TXT) with text extraction, so you can ask questions about a document you've uploaded (see [Document Upload](#document-upload) below)
 
 ## Planned
 
-- Multi-modal input (images, documents, etc.)
-- Retrieval-augmented generation (RAG) over a document/knowledge store
+- Additional multi-modal input (images, audio)
+- Chunked retrieval-augmented generation (RAG) over a document/knowledge store, so only the relevant passages of a large document are sent to the model instead of the whole thing
 
 ## Long-Term Memory
 
@@ -43,6 +44,21 @@ Before generating each reply, the user's latest message is embedded (`gemini-emb
 **Memory dashboard**
 
 The sidebar includes a "Long-Term Memory" section listing every stored memory grouped by type. Each memory can be edited in place (re-embedded automatically on save) or deleted individually, and a "Delete All Memories" button (behind a confirmation checkbox) wipes the store entirely.
+
+## Document Upload
+
+A file uploader at the top of the page accepts `.pdf` and `.txt` files. PDF text is extracted with [pypdf](https://pypdf.readthedocs.io/); plain-text files are decoded as UTF-8.
+
+**How it works**
+
+Extraction runs once, at upload time, and the result is cached in Streamlit session state keyed by filename and size — so the document isn't re-parsed on every message, and uploading a different file re-extracts automatically. The extracted text is then appended to that turn's system instruction inside explicit `--- BEGIN DOCUMENT --- / --- END DOCUMENT ---` delimiters, along with an instruction telling the model to use it as the primary source when answering questions about it. The document never enters the visible chat history.
+
+A "Document Information" panel in the sidebar shows the filename, file size, and (for PDFs) the page count, all read from the same cache.
+
+**Limitations**
+
+- The *entire* document is sent with every message. There is no chunking or passage-level retrieval yet, so a long PDF consumes a large amount of context per turn — this is what the chunked-RAG item under [Planned](#planned) addresses.
+- Scanned/image-only PDFs contain no selectable text, so nothing can be extracted from them. The app warns you and lets you keep chatting normally rather than failing.
 
 ## Prerequisites
 
