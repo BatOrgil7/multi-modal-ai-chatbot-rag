@@ -1,6 +1,6 @@
 # Multi-Modal AI Chatbot RAG
 
-A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone project in progress — the current version supports conversational chat, document upload and Q&A, and persistent long-term memory, with image/audio input and chunked retrieval over a knowledge store planned as next steps.
+A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone project in progress — the current version supports conversational chat, retrieval-augmented generation over an internal knowledge base, document upload and Q&A, and persistent long-term memory, with image/audio input and chunk-level retrieval planned as next steps.
 
 ## Current Features
 
@@ -12,11 +12,13 @@ A Streamlit-based chatbot powered by Google's Gemini API. This is a capstone pro
 - Automatic conversation summarization every 10 user messages, keeping the context sent to the model small enough to avoid hitting context-length limits, without losing the full chat history shown on screen
 - Long-term memory: the chatbot extracts and remembers facts, preferences, and past events about the user across sessions, retrieves what's relevant to each new message, and exposes a sidebar dashboard to view, edit, or delete what it remembers (see [Long-Term Memory](#long-term-memory) below)
 - Document upload (PDF/TXT) with text extraction, so you can ask questions about a document you've uploaded (see [Document Upload](#document-upload) below)
+- Retrieval-augmented generation (RAG) over an internal knowledge base: a fast model routes each question to the most relevant file, whose contents are then injected into the answering model's context (see [Internal Knowledge Base (RAG)](#internal-knowledge-base-rag) below)
 
 ## Planned
 
 - Additional multi-modal input (images, audio)
-- Chunked retrieval-augmented generation (RAG) over a document/knowledge store, so only the relevant passages of a large document are sent to the model instead of the whole thing
+- Chunk-level retrieval, so only the relevant passages of a large file are sent to the model rather than the whole file
+- Embedding-based retrieval for the knowledge base (the memory system already does this; knowledge-base routing is currently filename-based)
 
 ## Long-Term Memory
 
@@ -59,6 +61,42 @@ A "Document Information" panel in the sidebar shows the filename, file size, and
 
 - The *entire* document is sent with every message. There is no chunking or passage-level retrieval yet, so a long PDF consumes a large amount of context per turn — this is what the chunked-RAG item under [Planned](#planned) addresses.
 - Scanned/image-only PDFs contain no selectable text, so nothing can be extracted from them. The app warns you and lets you keep chatting normally rather than failing.
+
+## Internal Knowledge Base (RAG)
+
+The `knowledge_base/` folder holds `.txt` files representing private, non-public information the model has no way of knowing from its training data. Each user question is routed to the single most relevant file, whose contents are injected into the answering model's context. This implements the three standard RAG stages:
+
+**1. Retrieval**
+
+`get_knowledge_file()` sends the user's question plus the list of available filenames to a fast, cheap model (`gemini-3.1-flash-lite`) acting as a document router. Rather than parsing a filename out of free-form text, the response is constrained with Gemini's structured output:
+
+```python
+response_json_schema={"type": "string", "enum": available_files + ["NONE"]}
+```
+
+This makes it structurally impossible for the router to return anything except a real filename or `NONE`. The returned name is additionally checked against the actual directory listing before any file is opened, since model output shouldn't be trusted as a file path. Routing costs roughly 100 tokens per message, which is added to the cumulative token counter.
+
+**2. Augmentation**
+
+If a file is selected, its contents are read and appended to that turn's system instruction inside `--- BEGIN KNOWLEDGE BASE --- / --- END KNOWLEDGE BASE ---` delimiters, together with an instruction stating that this is private information that takes precedence over the model's own general knowledge when the two conflict. If the router returns `NONE`, nothing is injected and the chatbot answers normally.
+
+**3. Generation**
+
+The main model (`gemini-3.6-flash`) answers using the augmented instruction. When a file was used, a `📚 Retrieved from knowledge base: <filename>` caption appears beneath the reply so retrieval is visible rather than silent.
+
+**Sample data and how to verify it works**
+
+Three sample files ship with the project — `harvard.txt`, `duke.txt`, and `cornell.txt` — each a fictional "internal advising memo" containing invented specifics that no language model could know from training: internal program codes (`PQF-441`, `FAST-902`, `IFSS-1130`), exact stipend figures, fictional faculty directors, and internal portal names. Every file is clearly headed as fictional test data so it can't be mistaken for a genuine institutional record.
+
+To confirm retrieval is actually working, ask something only the files would answer:
+
+> What is the stipend for the Pforzheimer Quantitative Fellowship?
+
+A correct RAG answer cites **$47,500 plus a $3,200 computing allowance** from `harvard.txt`. If you instead get generic or real-world information about Harvard, retrieval did not fire.
+
+**Limitation**
+
+The router sees only **filenames**, never file contents, so routing accuracy depends on filenames describing their subject. `harvard.txt` works; `doc1.txt` would not. Scaling this up means either keeping filenames descriptive or moving to embedding-based retrieval like the memory system uses.
 
 ## Prerequisites
 
@@ -112,12 +150,16 @@ docker run -p 8501:8501 --env-file .env multi-modal-ai-chatbot-rag
 
 ```
 .
-├── AI_Chatbot.py       # Streamlit app entry point
+├── AI_Chatbot.py        # Streamlit app entry point
 ├── memory.py            # Long-term memory: storage, extraction, retrieval
-├── requirements.txt    # Python dependencies
+├── knowledge_base/      # Internal knowledge base files used for RAG
+│   ├── harvard.txt
+│   ├── duke.txt
+│   └── cornell.txt
+├── requirements.txt     # Python dependencies
 ├── Dockerfile           # Container build definition
 ├── .dockerignore
 ├── .gitignore
 ├── .env                 # Local secrets (not committed)
-└── memories.db           # Long-term memory store, created at runtime (not committed)
+└── memories.db          # Long-term memory store, created at runtime (not committed)
 ```

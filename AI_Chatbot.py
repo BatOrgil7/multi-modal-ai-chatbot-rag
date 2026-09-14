@@ -1,3 +1,4 @@
+import json
 import os
 import streamlit as st
 import pypdf
@@ -23,6 +24,65 @@ def extract_file_data(file) -> dict:
                 text += page_text + "\n"
         return {"text": text, "pages": len(reader.pages)}
     return {"text": file.read().decode("utf-8"), "pages": None}
+
+
+KNOWLEDGE_BASE_DIR = "knowledge_base"
+
+
+def list_knowledge_files() -> list[str]:
+    if not os.path.isdir(KNOWLEDGE_BASE_DIR):
+        return []
+    return sorted(f for f in os.listdir(KNOWLEDGE_BASE_DIR) if f.endswith(".txt"))
+
+
+def get_knowledge_file(prompt: str) -> tuple[str, int]:
+    """Retrieval step: ask a fast model which knowledge base file answers this question.
+
+    Returns the chosen filename (empty string if none apply) and the tokens it cost.
+    """
+    available_files = list_knowledge_files()
+    if not available_files:
+        return "", 0
+
+    file_list = "\n".join(f"- {name}" for name in available_files)
+    routing_prompt = (
+        f"Knowledge base files:\n{file_list}\n\n"
+        f"User question: {prompt}\n\n"
+        "Which single file most likely contains the answer?"
+    )
+
+    response = client.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents=routing_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a document router for a retrieval system. Given a user question and a "
+                "list of knowledge base filenames, return the filename of the single most "
+                "relevant file. Filenames indicate their subject. Return NONE if the question "
+                "is unrelated to every file."
+            ),
+            response_mime_type="application/json",
+            response_json_schema={"type": "string", "enum": available_files + ["NONE"]},
+        ),
+    )
+
+    tokens = response.usage_metadata.total_token_count
+
+    try:
+        selected = json.loads(response.text)
+    except (json.JSONDecodeError, TypeError):
+        return "", tokens
+
+    # The model's output is untrusted; only accept a name that is actually in the directory.
+    if selected not in available_files:
+        return "", tokens
+
+    return selected, tokens
+
+
+def load_knowledge_file(filename: str) -> str:
+    with open(os.path.join(KNOWLEDGE_BASE_DIR, filename), encoding="utf-8") as f:
+        return f.read()
 
 
 uploaded_file = st.file_uploader("Upload a PDF or TXT files", type=("txt", "pdf"))
@@ -213,7 +273,28 @@ if prompt := st.chat_input("Yo we can chat here..."):
     ]
 
     relevant_memories = memory.retrieve_relevant_memories(client, prompt)
-    full_system_instruction = system_instruction + memory.format_memories_for_prompt(relevant_memories) + document_section
+
+    knowledge_filename, retrieval_tokens = get_knowledge_file(prompt)
+    st.session_state.total_tokens += retrieval_tokens
+
+    knowledge_section = ""
+    if knowledge_filename:
+        knowledge_section = (
+            "\n\nThe following is an excerpt from the internal knowledge base "
+            f"(source: {knowledge_filename}). It is private, non-public information that "
+            "is more current and more authoritative than your own general knowledge. Answer "
+            "the user's question using it, and prefer it over anything you already know if "
+            "the two conflict:\n"
+            f"--- BEGIN KNOWLEDGE BASE ---\n{load_knowledge_file(knowledge_filename)}\n"
+            "--- END KNOWLEDGE BASE ---"
+        )
+
+    full_system_instruction = (
+        system_instruction
+        + memory.format_memories_for_prompt(relevant_memories)
+        + document_section
+        + knowledge_section
+    )
 
     with st.chat_message("assisstant"):
         stream = client.models.generate_content_stream(
@@ -231,6 +312,9 @@ if prompt := st.chat_input("Yo we can chat here..."):
                 yield chunk.text
 
         msg = st.write_stream(stream_text())
+
+        if knowledge_filename:
+            st.caption(f"📚 Retrieved from knowledge base: `{knowledge_filename}`")
 
     if "metadata" in usage:
         st.session_state.last_input_tokens = usage["metadata"].prompt_token_count or 0
